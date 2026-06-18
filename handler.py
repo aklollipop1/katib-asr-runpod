@@ -1,4 +1,4 @@
-import runpod, base64, torch
+import runpod, base64, tempfile, os, torch
 from transformers import pipeline
 
 asr = pipeline(
@@ -10,15 +10,28 @@ asr = pipeline(
 )
 
 def handler(job):
-    inp = job["input"]
+    inp = job.get("input", {})
     audio_b64 = inp.get("audio_base64", "")
     if not audio_b64:
         return {"error": "no audio_base64 provided"}
+
+    # decode base64 -> write to a temp WAV file
     audio_bytes = base64.b64decode(audio_b64)
-    result = asr(
-        audio_bytes,
-        generate_kwargs={"language": "pashto", "task": "transcribe"},
-    )
-    return {"text": result["text"]}
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(audio_bytes)
+            tmp_path = f.name
+
+        result = asr(
+            tmp_path,
+            generate_kwargs={"language": "pashto", "task": "transcribe"},
+        )
+        return {"text": result.get("text", "").strip()}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 runpod.serverless.start({"handler": handler})
